@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NCEA Reading Corequisite - Advanced Simulation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Block Selection and UI hints */
+        .unselectable { -webkit-user-select: none; user-select: none; }
+        .passage-scroll { height: 600px; overflow-y: auto; border: 1px solid #e5e7eb; padding: 2rem; background: #fff; }
+        body { background-color: #f0f2f5; overflow-x: hidden; }
+        .hidden { display: none; }
+        .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 9999; color: white; display: flex; align-items: center; justify-content: center; text-align: center; display: none; }
+    </style>
+</head>
+<body oncontextmenu="return false;" class="unselectable" onkeydown="return disableKeys(event)">
+
+<div id="cheat-overlay" class="overlay">
+    <div>
+        <h1 class="text-4xl font-bold mb-4">SECURITY ALERT</h1>
+        <p class="text-xl">You have moved away from the exam window or attempted to use a tool.<br>This incident has been logged. Return to the window to continue.</p>
+        <button onclick="resumeExam()" class="mt-6 bg-white text-black px-6 py-2 rounded font-bold">RETURN TO EXAM</button>
+    </div>
+</div>
+
+<div id="app" class="max-w-7xl mx-auto my-6 p-6 bg-white shadow-2xl rounded-lg border-t-8 border-blue-900">
+    <div class="flex justify-between items-center mb-6 border-b pb-4">
+        <div>
+            <h1 class="text-2xl font-bold text-blue-900">NCEA Level 1 Reading Corequisite</h1>
+            <p id="student-identity" class="text-gray-600 font-medium italic"></p>
+        </div>
+        <div id="timer-box" class="hidden text-right">
+            <div id="timer" class="text-3xl font-mono font-bold text-red-600">45:00</div>
+            <span id="lock-timer" class="text-xs font-bold text-red-800 uppercase">Exam Locked</span>
+        </div>
+    </div>
+
+    <div id="start-screen" class="max-w-2xl mx-auto py-10 text-center">
+        <h2 class="text-2xl font-bold mb-6">Candidate Verification</h2>
+        <input type="text" id="name-input" placeholder="Enter Full Name" class="border-2 border-gray-300 p-4 rounded-lg w-full mb-6 text-center text-lg shadow-sm">
+        <div class="text-left text-sm text-gray-700 bg-red-50 border-l-4 border-red-500 p-6 mb-8">
+            <h3 class="font-bold text-red-800 mb-2">Academic Integrity Agreement:</h3>
+            <ul class="list-disc ml-5 space-y-1">
+                <li>Translators, AI tools, and external tabs are strictly prohibited.</li>
+                <li>The "Final Submit" button will only unlock after 24 minutes (8 mins per text).</li>
+                <li>Any attempt to exit full-screen or switch tabs will be flagged in the report.</li>
+                <li>Text copying is disabled to prevent external translation.</li>
+            </ul>
+        </div>
+        <button onclick="startAssessment()" class="bg-blue-900 text-white px-16 py-4 rounded-xl font-bold hover:bg-blue-800 shadow-xl text-xl">START OFFICIAL ASSESSMENT</button>
+    </div>
+
+    <div id="exam-area" class="hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div class="lg:col-span-7">
+                <div class="passage-scroll rounded shadow-inner leading-relaxed text-gray-800" id="text-display"></div>
+            </div>
+            <div class="lg:col-span-5 space-y-6 overflow-y-auto" style="max-height: 600px;" id="question-display"></div>
+        </div>
+
+        <div class="mt-10 flex justify-between items-center border-t pt-8">
+            <button id="prev-btn" onclick="prevSection()" class="bg-gray-200 text-gray-700 px-8 py-3 rounded font-bold hover:bg-gray-300 transition">PREVIOUS PASSAGE</button>
+            <span id="progress-text" class="text-blue-900 font-black text-xl">Section 1 of 3</span>
+            <button id="next-btn" onclick="nextSection()" class="bg-blue-900 text-white px-8 py-3 rounded font-bold hover:bg-blue-800 transition">NEXT PASSAGE</button>
+        </div>
+    </div>
+
+    <div id="report-screen" class="hidden">
+        <div id="report-header" class="mb-8"></div>
+        <div id="report-content" class="space-y-4"></div>
+        <div class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 bg-blue-50 p-6 rounded-lg border border-blue-200">
+            <div>
+                <h4 class="font-bold text-blue-900 mb-2">Performance Summary</h4>
+                <p id="perf-summary" class="text-sm text-gray-700"></p>
+            </div>
+            <div>
+                <h4 class="font-bold text-blue-900 mb-2">Integrity Log</h4>
+                <p id="integrity-log" class="text-sm text-red-700 font-mono"></p>
+            </div>
+        </div>
+        <button onclick="generatePDF()" class="mt-10 bg-black text-white px-8 py-5 rounded-xl font-bold w-full text-xl hover:bg-gray-900 transition">DOWNLOAD FINAL PDF REPORT</button>
+    </div>
+</div>
+
+<script>
+const { jsPDF } = window.jspdf;
+let studentName = "", tabSwitches = 0, currentSection = 0, timeLeft = 2700, totalElapsed = 0;
+let examStarted = false, userAnswers = {};
+
+const examData = [
+    {
+        title: "Passage 1: The Bio-Security Crisis in the Hauraki Gulf",
+        content: `The Hauraki Gulf Marine Park, a crown jewel of New Zealand's biodiversity, is currently under siege by an invisible invader: <i>Caulerpa brachypus</i>. This exotic seaweed, native to subtropic waters, was first detected off Aotea (Great Barrier Island) and has since spread with alarming speed. Unlike native kelp forests, which provide a complex habitat for snapper and crayfish, Caulerpa forms dense, suffocating mats that carpet the seafloor, effectively creating an underwater desert.<br><br>The economic implications are as dire as the ecological ones. Commercial fishers report that the seaweed fouls nets and depletes traditional fishing grounds. Furthermore, the spread of the weed is largely human-facilitated. Tiny fragments, no larger than a fingernail, can cling to boat anchors or diving gear, surviving for days in damp anchor lockers before being introduced to a new, pristine bay. <br><br>Government response has been criticized as being reactive rather than proactive. While 'Controlled Area Notices' have been issued to limit anchoring in infested zones, the sheer scale of the Gulf makes enforcement a logistical nightmare. Scientists are now exploring innovative dredging and suction technologies, but the cost is astronomical. The question remains: can the Gulf be saved, or is this the new, degraded reality for Auckland’s coastal waters? Success will require a radical shift in how recreational boaters perceive their responsibility to the environment. It is no longer enough to simply enjoy the water; one must now actively defend it.`,
+        questions: [
+            { q: "What makes Caulerpa different from native kelp forests?", options: ["It grows much slower", "It provides better food for snapper", "It forms dense mats that suffocate the seafloor", "It is easier to remove with anchors"], correct: 2, level: "Literal" },
+            { q: "How does the seaweed primarily spread to new locations?", options: ["Natural ocean currents carrying seeds", "Human activities like boating and diving", "Migrating fish eating the fragments", "Climate change warming the water"], correct: 1, level: "Literal" },
+            { q: "What does the phrase 'underwater desert' imply?", options: ["The water is becoming too warm", "The area lacks life and biological diversity", "The sand is replacing the coral", "The water is too clear"], correct: 1, level: "Inferential" },
+            { q: "The author mentions 'snapper and crayfish' primarily to:", options: ["Show what the seaweed likes to eat", "Explain the history of the Gulf", "Highlight the valuable species at risk", "Argue for more fishing quotas"], correct: 2, level: "Inferential" },
+            { q: "What is the overall tone regarding the government's response?", options: ["Enthusiastic and supportive", "Critical and skeptical", "Uncertain but hopeful", "Indifferent"], correct: 1, level: "Critical" },
+            { q: "What is the author's primary persuasive goal?", options: ["To ban all boating in the Hauraki Gulf", "To encourage boaters to take personal responsibility", "To promote new dredging technology", "To describe the beauty of Aotea"], correct: 1, level: "Critical" }
+        ]
+    },
+    {
+        title: "Passage 2: The Weight of Inheritance (Fiction)",
+        content: `The key felt heavy in Elena’s palm, cold and tarnished. It had been nearly twenty years since she last stood before the gates of her grandmother’s estate in Central Otago. The wind here didn't just blow; it searched, whistling through the dry tussock and rattling the corrugated iron roof of the old woolshed. Elena remembered the summers of her youth—the smell of sun-baked earth and the rhythmic <i>snip-snip</i> of hand shears. Now, there was only the silence of the hills. <br><br>She turned the key. The lock groaned, a metallic protest against the intrusion of time. Inside, the house smelled of dust and cedar. Shadows stretched across the floor like dark, reaching fingers. Her grandmother had been a woman of steel and soft wool, a pioneer who survived droughts that turned the land to dust and winters that froze the pipes solid. Elena walked to the mantelpiece where a single photograph stood. It showed a younger version of her grandmother, eyes squinting against the harsh Otago sun, standing proudly beside a prize-winning ram. <br><br>Elena realized she wasn't just inheriting a house; she was inheriting a history of endurance. She looked out the window at the rugged landscape. The mountains looked like sleeping giants, indifferent to the passing of human generations. She wondered if she had enough of her grandmother's 'steel' to survive here, or if the silence of the hills would eventually swallow her whole, just as it had the generations before.`,
+        questions: [
+            { q: "Where is the story set?", options: ["Auckland City", "Central Otago", "The North Island coast", "A modern wool factory"], correct: 1, level: "Literal" },
+            { q: "What sound did Elena remember from her youth?", options: ["The sound of rain on iron", "The rhythmic snip of hand shears", "The groan of the front door", "The sound of her grandmother singing"], correct: 1, level: "Literal" },
+            { q: "What does the phrase 'woman of steel and soft wool' suggest?", options: ["She was a blacksmith and a knitter", "She was physically strong but mentally weak", "She had a tough character but a kind or gentle side", "She preferred working with animals over people"], correct: 2, level: "Inferential" },
+            { q: "The comparison of mountains to 'sleeping giants' emphasizes:", options: ["Their beauty and color", "Their massive size and indifferent nature", "Their danger to hikers", "The fact that they are volcanoes"], correct: 1, level: "Inferential" },
+            { q: "How does the mood change as Elena enters the house?", options: ["From nostalgia to a sense of cold reality and tension", "From anger to complete happiness", "From boredom to excitement", "From fear to total relaxation"], correct: 0, level: "Critical" },
+            { q: "What is the main theme of the passage?", options: ["The difficulty of farming in New Zealand", "The connection between family history and personal identity", "The best way to restore old houses", "The beauty of the Otago landscape"], correct: 1, level: "Critical" }
+        ]
+    },
+    {
+        title: "Passage 3: The Ethics of Digital Twinning",
+        content: `In the realm of urban planning, 'Digital Twinning' is no longer science fiction. By creating a 1:1 virtual replica of a city like Christchurch, planners can simulate everything from earthquake impacts to traffic flow changes. These twins are fed by thousands of sensors—cameras, GPS data from phones, and moisture sensors in the soil. While the efficiency gains are undeniable, we must confront the ethical shadow cast by this technology. <br><br>The primary concern is one of surveillance. If every movement of a citizen is mirrored in a digital twin, the boundary between public safety and private life vanishes. Who owns this data? Is it the private tech firms that build the twin, or the citizens whose lives provide the data points? There is a risk that city management becomes a cold exercise in data optimization, ignoring the 'human messiness' that makes a city a community. <br><br>Furthermore, the digital divide threatens to turn these 'smart cities' into exclusive enclaves. If planning is driven solely by data from high-tech neighborhoods, the voices of those in lower-income areas—who may not have the latest sensors or smartphones—are effectively muted. We must ensure that the digital twin is a tool for equity, not just another way for the privileged to optimize their commute at the expense of everyone else's privacy.`,
+        questions: [
+            { q: "What is a 'Digital Twin' in urban planning?", options: ["A second city built nearby", "A virtual 1:1 replica used for simulations", "A map made by two different companies", "A system for tracking identical twins"], correct: 1, level: "Literal" },
+            { q: "What data feeds these digital twins?", options: ["Newspaper articles and interviews", "Sensors, cameras, and GPS data", "Historical books about Christchurch", "Manual surveys taken every ten years"], correct: 1, level: "Literal" },
+            { q: "What is the 'ethical shadow' mentioned in the text?", options: ["The high cost of the electricity to run the twin", "The potential for constant surveillance and loss of privacy", "The risk of the computer being hacked by other countries", "The fear that the virtual city will replace the real one"], correct: 1, level: "Inferential" },
+            { q: "What does the author mean by 'human messiness'?", options: ["Poor sanitation in the city", "The unpredictable and social nature of people", "The difficulty of cleaning up after an earthquake", "Mistakes made by the computer programmers"], correct: 1, level: "Inferential" },
+            { q: "How does the digital divide affect this technology?", options: ["It makes the internet faster for everyone", "It might cause planning to ignore lower-income voices", "It allows the city to save money on sensors", "It prevents earthquakes from being simulated"], correct: 1, level: "Critical" },
+            { q: "The author's perspective on Digital Twinning is best described as:", options: ["Unconditionally supportive", "Cautiously critical", "Completely opposed", "Disinterested"], correct: 1, level: "Critical" }
+        ]
+    }
+];
+
+// SECURITY & ANTI-CHEAT
+window.addEventListener("blur", () => {
+    if(examStarted) {
+        tabSwitches++;
+        document.getElementById('cheat-overlay').style.display = 'flex';
+    }
+});
+
+function resumeExam() {
+    document.getElementById('cheat-overlay').style.display = 'none';
+}
+
+function disableKeys(e) {
+    if (e.ctrlKey && (e.key === 'c' || e.key === 'v' || e.key === 'u' || e.key === 'i')) return false;
+}
+
+function startAssessment() {
+    studentName = document.getElementById('name-input').value.trim();
+    if (!studentName) return alert("Enter your name to verify the session.");
+    document.getElementById('start-screen').classList.add('hidden');
+    document.getElementById('exam-area').classList.remove('hidden');
+    document.getElementById('timer-box').classList.remove('hidden');
+    document.getElementById('student-identity').innerText = `Candidate: ${studentName}`;
+    examStarted = true;
+    renderSection();
+    startTimers();
+}
+
+function startTimers() {
+    setInterval(() => {
+        if(examStarted) {
+            timeLeft--;
+            totalElapsed++;
+            let m = Math.floor(timeLeft / 60), s = timeLeft % 60;
+            document.getElementById('timer').innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
+            
+            const btn = document.getElementById('nav-btn'); // Logic for the final lock
+            if (totalElapsed < 1440) { // 24 mins total (8 mins per text)
+                document.getElementById('lock-timer').innerText = `Locked: ${Math.floor((1440 - totalElapsed)/60)}m left`;
+            } else {
+                document.getElementById('lock-timer').innerText = "Exam Unlocked ✅";
+                document.getElementById('lock-timer').classList.replace('text-red-800', 'text-green-700');
+            }
+        }
+    }, 1000);
+}
+
+function renderSection() {
+    const data = examData[currentSection];
+    document.getElementById('progress-text').innerText = `Passage ${currentSection + 1} of 3`;
+    document.getElementById('text-display').innerHTML = `<h2 class="text-2xl font-bold mb-4 text-blue-900">${data.title}</h2><div class="text-lg space-y-4">${data.content}</div>`;
+    
+    let qHTML = "";
+    data.questions.forEach((q, i) => {
+        const saved = userAnswers[`s${currentSection}q${i}`];
+        qHTML += `<div class="bg-white p-5 border-2 rounded shadow-sm">
+            <p class="font-bold mb-3 text-gray-800">${i + 1}. ${q.q}</p>
+            <div class="space-y-2">`;
+        q.options.forEach((opt, oi) => {
+            qHTML += `<label class="block p-3 border rounded cursor-pointer hover:bg-gray-50">
+                <input type="radio" name="sec${currentSection}q${i}" value="${oi}" ${saved == oi ? 'checked' : ''} onchange="saveAnswer(${currentSection}, ${i}, ${oi})"> ${opt}
+            </label>`;
+        });
+        qHTML += `</div></div>`;
+    });
+    document.getElementById('question-display').innerHTML = qHTML;
+    document.getElementById('text-display').scrollTop = 0;
+    
+    document.getElementById('prev-btn').style.visibility = (currentSection === 0) ? 'hidden' : 'visible';
+    document.getElementById('next-btn').innerText = (currentSection === 2) ? "FINAL SUBMIT" : "NEXT PASSAGE";
+}
+
+function saveAnswer(s, q, v) {
+    userAnswers[`s${s}q${q}`] = v;
+}
+
+function nextSection() {
+    if (currentSection < 2) {
+        currentSection++;
+        renderSection();
+    } else {
+        if (totalElapsed < 1440) {
+            alert("You must spend at least 8 minutes per passage (24 minutes total) before final submission.");
+        } else {
+            finishExam();
+        }
+    }
+}
+
+function prevSection() {
+    if (currentSection > 0) {
+        currentSection--;
+        renderSection();
+    }
+}
+
+function finishExam() {
+    examStarted = false;
+    document.getElementById('exam-area').classList.add('hidden');
+    document.getElementById('timer-box').classList.add('hidden');
+    document.getElementById('report-screen').classList.remove('hidden');
+
+    let score = 0;
+    let totalQuestions = 0;
+    let feedbackHTML = "";
+
+    examData.forEach((sec, sIdx) => {
+        feedbackHTML += `<h3 class="text-xl font-bold text-blue-900 border-b-2 pb-1 mt-6">${sec.title}</h3>`;
+        sec.questions.forEach((q, qIdx) => {
+            totalQuestions++;
+            const userChoice = userAnswers[`s${sIdx}q${qIdx}`];
+            const isCorrect = userChoice == q.correct;
+            if (isCorrect) score++;
+
+            feedbackHTML += `<div class="p-4 border-l-4 ${isCorrect ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50'}">
+                <p class="font-bold text-sm">${q.q}</p>
+                <p class="text-xs italic mb-1">Standard: ${q.level}</p>
+                <p class="text-sm">Your Answer: ${userChoice !== undefined ? q.options[userChoice] : '<span class="text-red-600 font-bold">Unanswered</span>'}</p>
+                ${!isCorrect ? `<p class="text-sm text-red-700 font-bold">Correct: ${q.options[q.correct]}</p>` : ''}
+            </div>`;
+        });
+    });
+
+    document.getElementById('report-header').innerHTML = `
+        <h2 class="text-3xl font-black text-blue-900">${studentName} - Official Report</h2>
+        <p class="text-xl">Score: <span class="font-bold text-blue-700">${score} / ${totalQuestions}</span></p>
+    `;
+    document.getElementById('report-content').innerHTML = feedbackHTML;
+    document.getElementById('integrity-log').innerText = `Tab/Focus Violations: ${tabSwitches}\nTime Spent: ${Math.floor(totalElapsed/60)}m ${totalElapsed%60}s`;
+    document.getElementById('perf-summary').innerText = score >= 14 ? "CANDIDATE READY: You have demonstrated the literacy skills required for the NCEA Reading Corequisite." : "ADDITIONAL SUPPORT REQUIRED: Focus on identifying authorial intent and inferential clues.";
+}
+
+function generatePDF() {
+    const doc = new jsPDF();
+    doc.setFontSize(22); doc.text("NCEA Reading Assessment", 20, 20);
+    doc.setFontSize(14); doc.text(`Candidate: ${studentName}`, 20, 35);
+    doc.text(`Score: ${document.getElementById('report-header').innerText.split('Score: ')[1]}`, 20, 45);
+    doc.text(`Security Violations: ${tabSwitches}`, 20, 55);
+    doc.text(`Duration: ${Math.floor(totalElapsed/60)} minutes`, 20, 65);
+    doc.save(`${studentName}_NCEA_Reading_Report.pdf`);
+}
+</script>
+</body>
+</html>
